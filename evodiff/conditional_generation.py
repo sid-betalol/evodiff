@@ -554,6 +554,56 @@ def inpaint(model, tokenized_sequences, start_idxs, end_idxs, sequences, tokeniz
     sequences_idrs = originals_idr # [s for s in enumerate(originals_idr)]
     sequences = [[s] for s in originals]
     return untokenized_seqs, sequences, untokenized_idrs, sequences_idrs, save_starts, save_ends # strings, og_strings, new_idrs, og_idrs
+    
+def inpaint_multiple_regions(model, tokenized_sequences, start_idxs, end_idxs, sequences, tokenizer=Tokenizer(), device='cuda', random_baseline=False, data_top_dir='/'):
+    if random_baseline:
+        train_prob_dist = aa_reconstruction_parity_plot(data_top_dir+'../', 'reference/', 'placeholder.csv', gen_file=False)
+    all_aas = tokenizer.all_aas
+
+    samples = []
+    samples_idr = []
+    originals = []
+    originals_idr = []
+    save_starts = []
+    save_ends = []
+
+    for s, sample in enumerate(tokenized_sequences):
+        original_sequence = sequences[s]
+        modified_sample = sample.clone().to(torch.long).to(device)
+
+        for region_idx in range(len(start_idxs[s])):
+            start = start_idxs[s][region_idx]
+            end = end_idxs[s][region_idx]
+            loc = np.arange(start, end)
+            np.random.shuffle(loc)
+            
+            with torch.no_grad():
+                for i in loc:
+                    timestep = torch.tensor([0])  # Placeholder, not called in model
+                    timestep = timestep.to(device)
+                    if random_baseline:
+                        p_sample = torch.multinomial(torch.tensor(train_prob_dist), num_samples=1)
+                    else:
+                        prediction = model(modified_sample.unsqueeze(0), timestep)
+                        p = prediction[:, i, :len(all_aas) - 6]
+                        p = torch.nn.functional.softmax(p, dim=1)
+                        p_sample = torch.multinomial(p, num_samples=1)
+                    modified_sample[i] = p_sample.squeeze()
+
+            print(s, "GENERATED REGION", tokenizer.untokenize(modified_sample[start:end]))
+            samples_idr.append(modified_sample[start:end])
+            originals_idr.append(sequences[s][start:end])
+            save_starts.append(start)
+            save_ends.append(end)
+
+        samples.append(modified_sample)
+        originals.append(original_sequence)
+
+    untokenized_seqs = [[tokenizer.untokenize(s)] for s in samples]
+    untokenized_idrs = [tokenizer.untokenize(s) for s in samples_idr]
+    sequences_idrs = [idr for idr in originals_idr]
+    sequences = [[s] for s in originals]
+    return untokenized_seqs, sequences, untokenized_idrs, sequences_idrs, save_starts, save_ends
 
 import itertools
 def intervals_extract(iterable):
